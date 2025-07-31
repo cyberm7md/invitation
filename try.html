@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wedding Invitation QR System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@700&family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        @media print {
+            body * {
+                visibility: hidden;
+            }
+            #qr-code-container, #qr-code-container * {
+                visibility: visible;
+            }
+            #qr-code-container {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+            }
+            .qr-card {
+                page-break-inside: avoid;
+            }
+            .no-print {
+                display: none;
+            }
+        }
+        .dancing-script {
+            font-family: 'Dancing Script', cursive;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans flex items-center justify-center min-h-screen">
+
+    <div id="app" class="w-full max-w-4xl mx-auto p-4 md:p-8">
+        <!-- Main container -->
+    </div>
+
+    <script type="module">
+        // Firebase Imports
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- FIREBASE CONFIGURATION ---
+        // These variables are provided by the environment. Do not change them.
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "DEMO", authDomain: "DEMO", projectId: "DEMO" };
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'wedding-qr-demo';
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        // --- APPLICATION STATE ---
+        let dbReady = false;
+
+        // --- AUTHENTICATION ---
+        async function setupAuth() {
+            try {
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+                dbReady = true;
+            } catch (error) {
+                console.error("Authentication failed:", error);
+                renderError("Could not connect to the check-in service. Please try again.");
+            }
+        }
+
+        // --- CORE LOGIC ---
+        
+        /**
+         * Checks the status of an invitation ID in Firestore.
+         * @param {string} inviteId - The unique ID of the invitation.
+         */
+        async function checkInviteStatus(inviteId) {
+            if (!dbReady) {
+                renderLoading("Connecting to check-in service...");
+                await setupAuth();
+            }
+            
+            renderLoading("Verifying your invitation...");
+
+            const inviteRef = doc(db, `artifacts/${appId}/public/data/invites/${inviteId}`);
+
+            try {
+                const docSnap = await getDoc(inviteRef);
+
+                if (docSnap.exists() && docSnap.data().scanned) {
+                    // Already scanned
+                    const scannedDate = docSnap.data().scannedAt ? new Date(docSnap.data().scannedAt.seconds * 1000).toLocaleString() : 'previously';
+                    renderScanned(scannedDate);
+                } else {
+                    // First time scanning
+                    await setDoc(inviteRef, { 
+                        scanned: true,
+                        scannedAt: new Date()
+                    });
+                    renderSuccess();
+                }
+            } catch (error) {
+                console.error("Error checking invite status:", error);
+                renderError("We couldn't verify your invitation. Please find a staff member for assistance.");
+            }
+        }
+
+        /**
+         * Generates a specified number of QR codes.
+         * @param {number} count - The number of QR codes to generate.
+         */
+        function generateQRCodes(count) {
+            const container = document.getElementById('qr-code-container');
+            const baseUrlInput = document.getElementById('base-url');
+            if (!container || !baseUrlInput) return;
+
+            const baseUrl = baseUrlInput.value.trim();
+            if (!baseUrl || !baseUrl.startsWith('http')) {
+                alert('Please enter a valid public URL (e.g., "https://your-site.netlify.app/invites.html") where this page will be hosted.');
+                baseUrlInput.focus();
+                return;
+            }
+            
+            container.innerHTML = ''; // Clear previous codes
+
+            for (let i = 1; i <= count; i++) {
+                const uniqueId = `invite-${crypto.randomUUID()}`;
+                const checkinUrl = `${baseUrl.split('?')[0]}?check=${uniqueId}`;
+                console.log(`Generated QR Code URL #${i}: ${checkinUrl}`);
+
+                const card = document.createElement('div');
+                card.className = 'qr-card bg-white p-4 rounded-lg shadow-md flex flex-col items-center gap-2 border border-gray-200';
+                
+                const title = document.createElement('p');
+                title.className = 'font-semibold text-gray-700';
+                title.textContent = `Invitation #${i}`;
+                
+                const qrElement = document.createElement('div');
+                qrElement.id = `qrcode-${i}`;
+
+                card.appendChild(title);
+                card.appendChild(qrElement);
+                container.appendChild(card);
+
+                new QRCode(qrElement, {
+                    text: checkinUrl,
+                    width: 128,
+                    height: 128,
+                    colorDark : "#000000",
+                    colorLight : "#ffffff",
+                    correctLevel : QRCode.CorrectLevel.H
+                });
+            }
+            
+            document.getElementById('print-btn').classList.remove('hidden');
+        }
+
+        // --- UI RENDERING ---
+
+        function renderLoading(message) {
+            const appContainer = document.getElementById('app');
+            appContainer.innerHTML = `
+                <div class="text-center bg-white p-12 rounded-2xl shadow-xl">
+                    <h1 class="dancing-script text-5xl text-gray-800 mb-4">Welcome!</h1>
+                    <div role="status" class="flex justify-center items-center space-x-2">
+                        <svg aria-hidden="true" class="w-8 h-8 text-gray-400 animate-spin fill-pink-500" viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 27.9921 72.5987 9.67226 50 9.67226C27.4013 9.67226 9.08144 27.9921 9.08144 50.5908Z" fill="currentColor"/>
+                            <path d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0492C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z" fill="currentFill"/>
+                        </svg>
+                        <span class="text-lg text-gray-600">${message}</span>
+                    </div>
+                </div>
+            `;
+        }
+        
+        function renderSuccess() {
+            const appContainer = document.getElementById('app');
+            appContainer.innerHTML = `
+                <div class="text-center bg-white p-12 rounded-2xl shadow-xl transform transition-all duration-500 scale-100">
+                    <div class="mx-auto bg-green-100 rounded-full h-24 w-24 flex items-center justify-center">
+                        <svg class="h-16 w-16 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                        </svg>
+                    </div>
+                    <h1 class="dancing-script text-5xl text-green-600 mt-6 mb-2">Checked In!</h1>
+                    <p class="text-gray-600 text-lg">Welcome! We're so happy to have you here.</p>
+                </div>
+            `;
+        }
+
+        function renderScanned(scannedDate) {
+            const appContainer = document.getElementById('app');
+            appContainer.innerHTML = `
+                <div class="text-center bg-white p-12 rounded-2xl shadow-xl transform transition-all duration-500 scale-100">
+                     <div class="mx-auto bg-red-100 rounded-full h-24 w-24 flex items-center justify-center">
+                        <svg class="h-16 w-16 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </div>
+                    <h1 class="dancing-script text-5xl text-red-600 mt-6 mb-2">Already Scanned</h1>
+                    <p class="text-gray-600 text-lg">This invitation was already used on ${scannedDate}.</p>
+                    <p class="text-gray-500 text-sm mt-4">If you believe this is a mistake, please find an event organizer.</p>
+                </div>
+            `;
+        }
+
+        function renderError(message) {
+             const appContainer = document.getElementById('app');
+            appContainer.innerHTML = `
+                <div class="text-center bg-white p-12 rounded-2xl shadow-xl">
+                    <div class="mx-auto bg-yellow-100 rounded-full h-24 w-24 flex items-center justify-center">
+                        <svg class="h-12 w-12 text-yellow-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                           <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                        </svg>
+                    </div>
+                    <h1 class="dancing-script text-4xl text-yellow-700 mt-6 mb-2">Oops!</h1>
+                    <p class="text-gray-600 text-lg">${message}</p>
+                </div>
+            `;
+        }
+        
+        function renderGenerator() {
+            const appContainer = document.getElementById('app');
+            appContainer.innerHTML = `
+                <div class="bg-white p-8 rounded-2xl shadow-xl text-center no-print">
+                    <h1 class="dancing-script text-5xl text-gray-800 mb-2">Invitation QR Code Generator</h1>
+                    <p class="text-gray-600 mb-6">Create unique QR codes for your guests.</p>
+                    
+                    <div class="mb-6">
+                        <label for="base-url" class="block text-sm font-medium text-gray-700 mb-1">Public URL for Check-in (Required)</label>
+                        <input type="text" id="base-url" class="w-full max-w-lg mx-auto border-gray-300 rounded-lg shadow-sm focus:ring-pink-500 focus:border-pink-500 p-3 text-lg" placeholder="https://your-site.com/invites.html">
+                        <p class="text-xs text-gray-500 mt-2">Host this file online and paste the public URL here. This is required for QR codes to work.</p>
+                    </div>
+
+                    <div class="flex flex-col sm:flex-row items-center justify-center gap-4 mb-8">
+                        <input type="number" id="qr-count" value="300" class="w-full sm:w-auto text-center border-gray-300 rounded-lg shadow-sm focus:ring-pink-500 focus:border-pink-500 p-3 text-lg" placeholder="Number of codes">
+                        <button id="generate-btn" class="w-full sm:w-auto bg-pink-500 text-white font-bold py-3 px-6 rounded-lg hover:bg-pink-600 transition duration-300 shadow-md">
+                            Generate Codes
+                        </button>
+                        <button id="print-btn" class="w-full sm:w-auto bg-gray-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-gray-700 transition duration-300 shadow-md hidden">
+                            Print All
+                        </button>
+                    </div>
+                </div>
+                <div id="qr-code-container" class="mt-8 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                    <!-- QR Codes will be generated here -->
+                </div>
+            `;
+
+            document.getElementById('generate-btn').addEventListener('click', () => {
+                const count = parseInt(document.getElementById('qr-count').value, 10);
+                if (count > 0 && count <= 1000) {
+                    generateQRCodes(count);
+                } else {
+                    alert('Please enter a number between 1 and 1000.');
+                }
+            });
+
+            document.getElementById('print-btn').addEventListener('click', () => {
+                window.print();
+            });
+        }
+
+        // --- ROUTING ---
+        
+        /**
+         * Main function to route based on URL parameters.
+         */
+        function main() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const inviteId = urlParams.get('check');
+
+            if (inviteId) {
+                // This is a check-in attempt from a scanned QR code
+                checkInviteStatus(inviteId);
+            } else {
+                // This is the admin/generator page
+                renderGenerator();
+            }
+        }
+
+        // Start the application
+        main();
+
+    </script>
+</body>
+</html>
